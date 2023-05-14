@@ -1,0 +1,211 @@
+---
+- name: Gitlab-grafana initialization playbook
+  hosts: "{{ gitlab_host | default('gitlab') }}"
+  become: "true"
+
+  vars:
+    - gitlab_hostname: "gitlab-grafana"
+      prometheus_server_archive_url: "https://github.com/prometheus/prometheus/releases/download/v2.43.1/prometheus-2.43.1.linux-amd64.tar.gz"
+      prometheus_node_exporter_archive_url: "https://github.com/prometheus/node_exporter/releases/download/v1.5.0/node_exporter-1.5.0.linux-amd64.tar.gz"
+
+  tasks:
+    - name: Set hostname
+      ansible.builtin.hostname:
+        name: "{{ gitlab_hostname }}"
+
+    - name: Add hostname to /etc/hosts
+      ansible.builtin.blockinfile:
+        path: "/etc/hosts"
+        block: |
+          127.0.1.1 {{ gitlab_hostname }}
+
+    - name: Set selinux
+      ansible.posix.seboolean:
+        name: "httpd_can_network_connect"
+        state: "yes"
+        persistent: "yes"
+
+    - name: Add docker-ce and nginx repo
+      ansible.builtin.yum_repository:
+        name: "{{ item.name }}"
+        description: "{{ item.description }}"
+        baseurl: "{{ item.baseurl }}"
+        gpgcheck: "yes"
+        gpgkey: "{{ item.gpgkey }}"
+      loop:
+        - name: "docker-ce"
+          description: "docker-ce repo"
+          baseurl: "https://download.docker.com/linux/centos/7/$basearch/stable"
+          gpgkey: "https://download.docker.com/linux/centos/gpg"
+        - name: "nginx"
+          description: "nginx repo"
+          baseurl: "http://nginx.org/packages/centos/7/$basearch/"
+          gpgkey: "http://nginx.org/keys/nginx_signing.key"
+
+    - name: Install software
+      ansible.builtin.yum:
+        pkg:
+          - "curl"
+          - "docker-ce"
+          - "nginx"
+          - "perl"
+          - "policycoreutils-python"
+          - "openssh-server"
+        update_cache: "yes"
+
+    - name: Create grafana, prometheus and node_exporter directory
+      ansible.builtin.file:
+        path: "/opt/{{ item }}"
+        state: "directory"
+        owner: "root"
+        group: "root"
+        mode: "775"
+      loop:
+        - "grafana"
+        - "prometheus"
+        - "node_exporter"
+
+    - name: Download and anarchive prometheus and node_exporter
+      ansible.builtin.unarchive:
+        src: "{{ item.src }}"
+        dest: "/opt/{{ item.name }}"
+        owner: "root"
+        group: "root"
+        remote_src: "yes"
+        extra_opts: "{{ item.extra_opts }}"
+      loop:
+        - name: "prometheus"
+          src: "{{ prometheus_server_archive_url }}"
+          extra_opts:
+            - "--strip-components=1"
+            - "--exclude=prometheus.yml"
+        - name: "node_exporter"
+          src: "{{ prometheus_node_exporter_archive_url }}"
+          extra_opts:
+            - "--strip-components=1"
+      notify:
+        - "Restart {{ item.name }}"
+
+    - name: Add custom prometheus and Grafana configs
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+        owner: "root"
+        group: "root"
+        mode: "644"
+      loop:
+        - name: "prometheus"
+          src: "prometheus.yml"
+          dest: "/opt/prometheus/prometheus.yml"
+          action: "Reload"
+        - name: "grafana"
+          src: "grafana.ini"
+          dest: "/opt/grafana/grafana.ini"
+          action: "Restart"
+      notify:
+        - "{{ item.action }} {{ item.name }}"
+
+    - name: Add prometheus and node_exporter service
+      ansible.builtin.copy:
+        src: "{{ item }}.service"
+        dest: "/etc/systemd/system/{{ item }}.service"
+        owner: "root"
+        group: "root"
+        mode: "644"
+      loop:
+        - "prometheus"
+        - "node_exporter"
+      notify:
+        - "Restart {{ item }}"
+
+    - name: Start docker, nginx, prometheus, node_exporter service
+      ansible.builtin.systemd:
+        name: "{{ item }}.service"
+        enabled: "yes"
+        state: "started"
+        daemon_reload: "yes"
+      loop:
+        - "docker"
+        - "nginx"
+        - "prometheus"
+        - "node_exporter"
+
+    - name: Run Grafana container
+      community.docker.docker_container:
+        name: "grafana"
+        image: "grafana/grafana:latest"
+        ports:
+          - "127.0.0.1:3000:3000"
+        volumes:
+          - "/opt/grafana/grafana.ini:/etc/grafana/grafana.ini"
+          - "grafana_data:/var/lib/grafana"
+        restart_policy: "unless-stopped"
+
+    - name: Run GitLab container
+      community.docker.docker_container:
+        name: "gitlab"
+        image: "gitlab/gitlab-ce:latest"
+        ports:
+          - "127.0.0.1:8080:80"
+          - "2222:22"
+        restart_policy: "unless-stopped"
+        volumes:
+          - "gitlab_config:/etc/gitlab"
+          - "gitlab_logs:/var/log/gitlab"
+          - "gitlab_data:/var/opt/gitlab"
+        shm_size: "256m"
+
+    - name: Add Nginx upstream configuration file
+      ansible.builtin.copy:
+        src: "gitlab_grafana_nginx.conf"
+        dest: "/etc/nginx/conf.d/"
+        owner: "root"
+        group: "root"
+        mode: "644"
+      notify:
+        - "Reload nginx"
+
+    - name: Remove default Nginx configuration file
+      ansible.builtin.file:
+        path: "/etc/nginx/conf.d/default.conf"
+        state: "absent"
+      notify:
+        - "Reload nginx"
+
+    - name: Add prometheus datasource to Grafana
+      community.grafana.grafana_datasource:
+        grafana_url: "http://127.0.0.1:3000"
+        grafana_user: "admin"
+        grafana_password: "admin"
+        name: "prometheus"
+        ds_type: "prometheus"
+        ds_url: "http://gitlab-grafana:9090"
+        access: "proxy"
+        is_default: "true"
+
+  handlers:
+    - name: Reload nginx
+      ansible.builtin.systemd:
+        name: "nginx"
+        state: "reloaded"
+
+    - name: Reload prometheus
+      ansible.builtin.systemd:
+        name: "prometheus"
+        state: "reloaded"
+
+    - name: Restart grafana
+      community.docker.docker_container:
+        name: "grafana"
+        state: "started"
+        restart: "true"
+
+    - name: Restart node_exporter
+      ansible.builtin.systemd:
+        name: "node_exporter"
+        state: "restarted"
+
+    - name: Restart prometheus
+      ansible.builtin.systemd:
+        name: "prometheus"
+        state: "restarted"

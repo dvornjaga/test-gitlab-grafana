@@ -1,0 +1,19 @@
+grafana:
+  adminPassword: admin
+  service:
+    type: LoadBalancer
+prometheus:
+  prometheusSpec:
+    retention: 14d
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: yc-network-ssd
+          resources:
+            requests:
+              storage: 10Gi
+    additionalScrapeConfigs:
+      - job_name: node-exporter
+        static_configs:
+          - targets:
+            - gitlab-grafana:9100

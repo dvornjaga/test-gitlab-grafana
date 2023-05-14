@@ -1,0 +1,14 @@
+[Unit]
+Description=Prometheus
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=root
+Group=root
+SyslogIdentifier=prometheus
+ExecStart=/opt/prometheus/prometheus --config.file=/opt/prometheus/prometheus.yml --web.enable-admin-api --web.listen-address=0.0.0.0:9090 --storage.tsdb.path=/opt/prometheus/data --web.console.templates=/opt/prometheus/consoles --web.console.libraries=/opt/prometheus/console_libraries
+ExecReload=/bin/kill -HUP $MAINPID
+
+[Install]
+WantedBy=default.target

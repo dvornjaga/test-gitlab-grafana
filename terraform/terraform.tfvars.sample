@@ -1,0 +1,20 @@
+# General
+yacloud_cloud_id = "YourYaCloudId"
+yacloud_folder_id = "YourYaCloudFolderId"
+yacloud_key_file = "/path/to/key.json"
+yacloud_default_zone_name = "ru-central1-b"
+
+# Account
+yacloud_service_account = {
+  account_01 = {
+    yacloud_service_account_description = "Your Yandex Cloud service account description"
+    yacloud_service_account_name = "your-yandex-cloud-service-account-name"
+  }
+}
+
+# Net
+yacloud_network_id = "YourYaCloudNetworkId"
+yacloud_subnet_id = "YourYaCloudSubnetId"
+
+# VPS
+yacloud_centos7_image_id = "YaCloudCentosImageID"
